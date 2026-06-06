@@ -7,6 +7,13 @@ max-tokens must be high enough to cover both reasoning + output code.
 import argparse, os, sys, pathlib
 from openai import OpenAI
 
+# Make the shared memory module importable (repo tools/ dir or installed bin).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+try:
+    import coworker_memory as mem
+except Exception:
+    mem = None
+
 client = OpenAI(
     api_key=os.environ.get("WORKER_API_KEY", os.environ.get("MOONSHOT_API_KEY", "")),
     base_url=os.environ.get("WORKER_BASE_URL", "https://api.moonshot.ai/v1"),
@@ -19,7 +26,27 @@ p.add_argument("--target", required=True, help="Output file path")
 p.add_argument("--max-tokens", type=int, default=16384,
                help="Total token budget (reasoning + output)")
 p.add_argument("--model", default=os.environ.get("WORKER_MODEL", "kimi-k2.5"))
+p.add_argument("--no-memory", action="store_true",
+               help="Skip the coworker cache (don't read or write memory)")
 args = p.parse_args()
+
+use_memory = mem and not args.no_memory and os.environ.get("COWORKER_MEMORY", "1") != "0"
+
+# The cache key is built from the reference file (if any) + the spec. The
+# --target is NOT part of the key: the *generated content* depends on what we
+# asked for and the style reference, not on where we save it. So a cache hit
+# still writes to whatever --target you pass this time.
+cache_paths = [args.context] if args.context else []
+
+# --- Coworker Memory: Layer 1 exact-cache lookup ---
+if use_memory:
+    hit = mem.lookup(cache_paths, args.spec, "write", args.model)
+    if hit is not None:
+        with open(args.target, "w") as f:
+            f.write(hit)
+        print(f"Wrote {args.target} ({len(hit)} chars)")
+        print("[coworker-memory: exact cache HIT — $0, 0 tokens]", file=sys.stderr)
+        sys.exit(0)
 
 ctx = ""
 if args.context:
@@ -47,6 +74,10 @@ if not content:
 # Strip accidental markdown fences if Kimi adds them
 if content.startswith("```"):
     content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+
+# Cache the cleaned content (so a future hit returns it fence-free).
+if use_memory:
+    mem.store(cache_paths, args.spec, "write", args.model, content)
 
 with open(args.target, "w") as f:
     f.write(content)

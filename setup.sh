@@ -27,6 +27,11 @@ pip install --quiet -r "${SCRIPT_DIR}/requirements.txt"
 echo "[3/4] Installing tools to ${BIN_DIR}..."
 mkdir -p "${BIN_DIR}"
 
+# Shared library: the Coworker Memory cache. Copied next to the tools so that
+# `import coworker_memory` resolves from the script's own directory.
+cp "${SCRIPT_DIR}/tools/coworker_memory.py" "${BIN_DIR}/coworker_memory.py"
+echo "  ✓ coworker_memory.py (shared cache library)"
+
 # ask-kimi and kimi-write need the venv (openai package)
 for tool in ask-kimi kimi-write; do
     sed "1s|#!/usr/bin/env python3|#!${VENV_PYTHON}|" \
@@ -35,10 +40,12 @@ for tool in ask-kimi kimi-write; do
     echo "  ✓ ${tool} (using venv python)"
 done
 
-# extract-chat uses only stdlib — symlink is fine
-chmod +x "${SCRIPT_DIR}/tools/extract-chat"
-ln -sf "${SCRIPT_DIR}/tools/extract-chat" "${BIN_DIR}/extract-chat"
-echo "  ✓ extract-chat (stdlib only)"
+# extract-chat and coworker-memory use only stdlib — symlinks are fine
+for tool in extract-chat coworker-memory; do
+    chmod +x "${SCRIPT_DIR}/tools/${tool}"
+    ln -sf "${SCRIPT_DIR}/tools/${tool}" "${BIN_DIR}/${tool}"
+    echo "  ✓ ${tool} (stdlib only)"
+done
 
 # 4. Check API key
 echo "[4/4] Checking environment..."
@@ -67,6 +74,17 @@ fi
 echo ""
 echo "=== Done! ==="
 echo ""
+
+# Guard against PATH shadowing: if another ask-kimi earlier on PATH wins, the
+# user will silently run a different (possibly memory-less) build. Catch it here.
+RESOLVED="$(command -v ask-kimi || true)"
+if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${BIN_DIR}/ask-kimi" ]; then
+    echo "⚠  PATH SHADOW: 'ask-kimi' resolves to ${RESOLVED}, not ${BIN_DIR}/ask-kimi."
+    echo "   Another copy earlier on PATH will run instead of the one just installed."
+    echo "   Fix: put ${BIN_DIR} first on PATH, or replace ${RESOLVED}."
+    echo ""
+fi
+
 echo "Make sure ${BIN_DIR} is on your PATH, then try:"
 echo "  ask-kimi --paths some_file.py --question 'what does this do?'"
 echo ""

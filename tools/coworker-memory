@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""coworker-memory — inspect and manage the Coworker Memory store.
+
+Stdlib only (sqlite3/hashlib), so it needs no venv. Subcommands:
+
+    coworker-memory stats              # how many memories, hits served, DB path
+    coworker-memory list [--project P] # recent memories (newest first)
+    coworker-memory forget <project>   # drop all memories for one project
+    coworker-memory clear              # wipe everything (asks for confirmation)
+"""
+import argparse
+import os
+import pathlib
+import sqlite3
+import sys
+import time
+
+# Import the shared library from this script's own directory.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import coworker_memory as mem
+
+
+def _ago(ts):
+    """Human 'time since' for a unix timestamp."""
+    d = time.time() - ts
+    for unit, s in (("d", 86400), ("h", 3600), ("m", 60)):
+        if d >= s:
+            return f"{int(d // s)}{unit} ago"
+    return "just now"
+
+
+def cmd_stats(_):
+    s = mem.stats()
+    print(f"memories stored   : {s['memories']}")
+    print(f"cache hits served : {s['cache_hits_served']}")
+    print(f"database          : {s['db']}")
+    live = mem.embed("ping") is not None
+    print(f"embedder (Layer 2): {'live ✓ ' + mem.EMBED_MODEL if live else 'offline — Layer 1 only'}")
+
+
+def cmd_recall(args):
+    """Query semantic memory directly — the manual version of what ask-kimi
+    does automatically. Also the seed of the future MCP resource."""
+    hits = mem.recall(args.query, k=args.k)
+    if not hits:
+        print("(no relevant memories — embedder offline, or nothing above the "
+              "relevance floor)")
+        return
+    for m in hits:
+        print(f"[{m['project']}] sim={m['cosine']:.2f} score={m['score']:.2f} "
+              f"~{int(m['age_days'])}d  Q: {m['question']}")
+        print(f"    {m['output'][:200]}")
+
+
+def cmd_list(args):
+    conn = sqlite3.connect(mem.DB_PATH)
+    q = ("SELECT project, tool, question, use_count, last_used "
+         "FROM memories")
+    params = ()
+    if args.project:
+        q += " WHERE project=?"
+        params = (args.project,)
+    q += " ORDER BY last_used DESC LIMIT ?"
+    params += (args.limit,)
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    if not rows:
+        print("(no memories yet)")
+        return
+    for project, tool, question, uses, last in rows:
+        q_short = (question[:60] + "…") if len(question) > 60 else question
+        print(f"[{project}] {tool:5} ×{uses:<3} {_ago(last):>9}  {q_short}")
+
+
+def cmd_prune(args):
+    """Consolidate the store: merge redundant memories, evict stale-and-cold
+    ones. Run with --dry-run first to preview."""
+    r = mem.consolidate(max_age_days=args.max_age_days, min_uses=args.min_uses,
+                        merge_threshold=args.merge_threshold, dry_run=args.dry_run)
+    verb = "Would merge/evict" if args.dry_run else "Merged/evicted"
+    print(f"scanned {r['scanned']} memories")
+    print(f"  merged   : {r['merged']} (redundant duplicates collapsed)")
+    print(f"  evicted  : {r['evicted']} (older than {args.max_age_days}d "
+          f"and used <= {args.min_uses}x)")
+    print(f"  remaining: {r['remaining']}")
+    if args.dry_run:
+        print("(dry run — nothing changed. Re-run without --dry-run to apply.)")
+
+
+def cmd_forget(args):
+    conn = sqlite3.connect(mem.DB_PATH)
+    n = conn.execute("DELETE FROM memories WHERE project=?",
+                     (args.project,)).rowcount
+    conn.commit()
+    conn.close()
+    print(f"Forgot {n} memories for project '{args.project}'.")
+
+
+def cmd_clear(args):
+    if not args.yes:
+        reply = input("Wipe ALL coworker memory? [y/N] ").strip().lower()
+        if reply != "y":
+            print("Aborted.")
+            return
+    conn = sqlite3.connect(mem.DB_PATH)
+    n = conn.execute("DELETE FROM memories").rowcount
+    conn.commit()
+    conn.close()
+    print(f"Cleared {n} memories.")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Manage the Coworker Memory store")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("stats", help="summary counts").set_defaults(fn=cmd_stats)
+
+    pl = sub.add_parser("list", help="recent memories")
+    pl.add_argument("--project", help="filter to one project")
+    pl.add_argument("--limit", type=int, default=20)
+    pl.set_defaults(fn=cmd_list)
+
+    pr = sub.add_parser("recall", help="semantic search the memory")
+    pr.add_argument("query")
+    pr.add_argument("-k", type=int, default=5, help="how many results")
+    pr.set_defaults(fn=cmd_recall)
+
+    pp = sub.add_parser("prune", help="consolidate: merge dups, evict stale")
+    pp.add_argument("--max-age-days", type=int, default=90,
+                    help="evict memories unused longer than this (default 90)")
+    pp.add_argument("--min-uses", type=int, default=1,
+                    help="protect memories used more than this many times")
+    pp.add_argument("--merge-threshold", type=float, default=0.97,
+                    help="cosine above which duplicates are merged")
+    pp.add_argument("--dry-run", action="store_true", help="preview only")
+    pp.set_defaults(fn=cmd_prune)
+
+    pf = sub.add_parser("forget", help="drop one project's memories")
+    pf.add_argument("project")
+    pf.set_defaults(fn=cmd_forget)
+
+    pc = sub.add_parser("clear", help="wipe everything")
+    pc.add_argument("--yes", action="store_true", help="skip confirmation")
+    pc.set_defaults(fn=cmd_clear)
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

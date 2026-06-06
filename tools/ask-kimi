@@ -7,6 +7,14 @@ max-tokens must be high enough to cover both reasoning + answer.
 import argparse, os, sys, pathlib
 from openai import OpenAI
 
+# Make the shared memory module importable whether we're running from the repo
+# (tools/ dir) or installed (next to the script in ~/.local/bin).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+try:
+    import coworker_memory as mem
+except Exception:
+    mem = None  # memory is optional — tool works fine without it
+
 client = OpenAI(
     api_key=os.environ.get("WORKER_API_KEY", os.environ.get("MOONSHOT_API_KEY", "")),
     base_url=os.environ.get("WORKER_BASE_URL", "https://api.moonshot.ai/v1"),
@@ -18,7 +26,50 @@ p.add_argument("--question", required=True, help="What to extract/answer")
 p.add_argument("--max-tokens", type=int, default=8192,
                help="Total token budget (reasoning + answer)")
 p.add_argument("--model", default=os.environ.get("WORKER_MODEL", "kimi-k2.5"))
+p.add_argument("--no-memory", action="store_true",
+               help="Skip the coworker cache (don't read or write memory)")
 args = p.parse_args()
+
+# Memory is on by default; COWORKER_MEMORY=0 or --no-memory disables it.
+use_memory = mem and not args.no_memory and os.environ.get("COWORKER_MEMORY", "1") != "0"
+
+# --- Coworker Memory: tiered lookup (BEFORE any expensive work) ---
+prior_messages = []  # Tier 2 recalled context to inject into the worker prompt
+if use_memory:
+    # Tier 0: exact cache — same question, same unchanged files -> instant $0.
+    hit = mem.lookup(args.paths, args.question, "ask", args.model)
+    if hit is not None:
+        print(hit)
+        print("\n[coworker-memory: exact cache HIT — $0, 0 tokens]", file=sys.stderr)
+        sys.exit(0)
+
+    # Embed the question ONCE; reuse for both Tier 1 and Tier 2. None => the
+    # local embedder is unavailable, so Layer 2 silently disables itself.
+    qvec = mem.embed(args.question)
+
+    # Tier 1: semantic cache — a near-identical question about the SAME files.
+    if qvec is not None:
+        hit = mem.semantic_lookup(args.paths, args.question, "ask",
+                                  args.model, qvec=qvec)
+        if hit is not None:
+            print(hit)
+            print("\n[coworker-memory: semantic cache HIT — $0, 0 tokens]",
+                  file=sys.stderr)
+            sys.exit(0)
+
+        # Tier 2: recall related prior conclusions to PRIME the worker.
+        recalled = mem.recall(args.question, qvec=qvec)
+        if recalled:
+            lines = ["Relevant conclusions from your earlier work. These may be "
+                     "outdated — trust the files over these if they conflict:"]
+            for m in recalled:
+                lines.append(
+                    f"\n- (project {m['project']}, ~{int(m['age_days'])}d ago, "
+                    f"sim {m['cosine']:.2f}) Q: {m['question']}\n"
+                    f"  Prior finding: {m['output']}")
+            prior_messages = [{"role": "user", "content": "\n".join(lines)}]
+            print(f"[coworker-memory: injected {len(recalled)} recalled "
+                  f"memory(ies) as context]", file=sys.stderr)
 
 # Build a stable prefix for cache hits (book/corpus first, question last)
 docs = []
@@ -37,6 +88,7 @@ resp = client.chat.completions.create(
             "Keep your answer under 800 words."
         )},
         {"role": "user", "content": f"<corpus>\n{corpus}\n</corpus>"},
+        *prior_messages,  # Tier 2 recalled context (empty list if none)
         {"role": "user", "content": args.question},
     ],
     max_tokens=args.max_tokens,
@@ -45,6 +97,9 @@ resp = client.chat.completions.create(
 answer = resp.choices[0].message.content
 if answer:
     print(answer)
+    # Persist for next time (this session or one months from now).
+    if use_memory:
+        mem.store(args.paths, args.question, "ask", args.model, answer)
 else:
     # Fallback: if content is empty but reasoning exists, model hit token limit
     print("[ERROR: Kimi ran out of tokens during reasoning. "

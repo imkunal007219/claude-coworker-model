@@ -161,7 +161,8 @@ Based on the pattern described in [this implementation (medium link)](https://me
 ## Author
 
 **Kunal Bhardwaj** — Systems engineer working on autonomous drones and AI-powered developer tools. Building at the intersection of embedded systems and LLM workflows.
-
+I'm currently open to freelance and contract work in applied AI — agentic systems, RAG pipelines with calibrated eval harnesses, LLM cost optimization, and Claude Code workflows like the one in this repo.
+- Email: kunalbhardwaj598@gmail.com
 - Blog: [medium.com/@kunalbhardwaj](https://medium.com/@kunalbhardwaj598/i-was-burning-through-claude-codes-weekly-limit-in-3-days-here-s-how-i-fixed-it-0344c555abda)
 - LinkedIn: [linkedin.com/in/kunalbhardwaj](https://www.linkedin.com/in/kunal-bhardwaj-61433818b)
 

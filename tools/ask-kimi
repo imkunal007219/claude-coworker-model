@@ -22,9 +22,29 @@ args = p.parse_args()
 
 # Build a stable prefix for cache hits (book/corpus first, question last)
 docs = []
-for path in args.paths:
-    content = pathlib.Path(path).read_text(errors="replace")
-    docs.append(f"<file path='{path}'>\n{content}\n</file>")
+for pattern in args.paths:
+    # Use pathlib to handle both literal paths and globs
+    # rglob handles the recursive '**' part automatically
+    base_path = pathlib.Path(".")
+
+    # Check if the input contains glob characters
+    if "*" in pattern or "?" in pattern:
+        # If it's a glob, resolve it
+        matched_files = list(base_path.glob(pattern)) if "**" not in pattern else list(base_path.glob(pattern))
+        # Note: In newer Python versions, pathlib.Path(".").glob(pattern)
+        # handles ** correctly if pattern starts with it.
+    else:
+        matched_files = [pathlib.Path(pattern)]
+
+    for path_obj in matched_files:
+        if path_obj.is_file():
+            content = path_obj.read_text(errors="replace")
+            docs.append(f"<file path='{path_obj}'>\n{content}\n</file>")
+
+if not docs:
+    print(f"[ERROR: No files matched the patterns: {args.paths}]", file=sys.stderr)
+    sys.exit(1)
+
 corpus = "\n\n".join(docs)
 
 resp = client.chat.completions.create(

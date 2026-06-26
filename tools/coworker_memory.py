@@ -168,8 +168,12 @@ def _normalize(vec):
     cosine similarity is just their dot product — one multiply-add, no
     division at query time. We normalize once at store/query and store the
     result, so search is as cheap as possible."""
-    n = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return [x / n for x in vec]
+    if not vec:
+        return vec
+    magnitude = math.sqrt(sum(x * x for x in vec))
+    if magnitude == 0:
+        return [0.0 for _ in vec]
+    return [x / magnitude for x in vec]
 
 
 def embed(text):

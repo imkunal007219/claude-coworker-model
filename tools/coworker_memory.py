@@ -504,3 +504,21 @@ def stats():
     finally:
         if conn is not None:
             conn.close()
+
+
+def stats():
+    """Read-only, fail-open snapshot of the memory store.
+
+    Returns a dict (currently just total cached entries). On ANY error
+    (missing/locked/corrupt DB) it returns safe zero defaults rather than
+    raising — memory is an accelerator, never a dependency.
+    """
+    try:
+        conn = _connect()
+        try:
+            (n,) = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
+        finally:
+            conn.close()
+        return {"total_memories": int(n)}
+    except Exception:
+        return {"total_memories": 0}

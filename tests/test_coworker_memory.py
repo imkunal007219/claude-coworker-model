@@ -324,3 +324,19 @@ class TestHelpers(MemoryTestBase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class NormalizeGuardTests(unittest.TestCase):
+    def test_empty_vector_returns_empty_not_crash(self):
+        # malformed/empty input must fail safe, not raise
+        self.assertEqual(mem._normalize([]), [])
+
+    def test_zero_vector_returns_zeros_not_crash(self):
+        # all-zero vector has no direction; must not divide by zero
+        out = mem._normalize([0.0, 0.0, 0.0])
+        self.assertEqual(out, [0.0, 0.0, 0.0])
+
+    def test_normal_vector_is_unit_normalized(self):
+        out = mem._normalize([3.0, 4.0])
+        self.assertAlmostEqual(out[0], 0.6, places=6)
+        self.assertAlmostEqual(out[1], 0.8, places=6)

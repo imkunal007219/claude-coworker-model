@@ -21,6 +21,8 @@ DESIGN PRINCIPLE: memory is an accelerator, never a dependency. Every function
 here FAILS OPEN — on any error it behaves as a cache miss and lets the real
 worker call proceed. A broken cache must never break the user's task.
 """
+from __future__ import annotations
+
 import array
 import hashlib
 import json
@@ -97,7 +99,7 @@ def _connect():
     return conn
 
 
-def hash_file(path):
+def hash_file(path: str) -> str:
     """SHA-256 of the file's BYTES — its true identity.
 
     Why hash content and not the modification time (mtime)?
@@ -124,7 +126,7 @@ def _normalize_question(q):
     return " ".join(q.lower().split())
 
 
-def compute_key(paths, question, tool, model):
+def compute_key(paths: list[str], question: str, tool: str, model: str) -> tuple[str, dict[str, str]]:
     """Build the content-addressed cache key.
 
     Returns (key, file_hashes). Sorting the hashes means the *order* of --paths
@@ -144,7 +146,7 @@ def compute_key(paths, question, tool, model):
     return key, file_hashes
 
 
-def current_project():
+def current_project() -> str:
     """Identify the current project for memory scoping.
 
     Prefer the git repository's top-level folder name (stable, survives `cd`
@@ -172,7 +174,7 @@ def _normalize(vec):
     return [x / n for x in vec]
 
 
-def embed(text):
+def embed(text: str) -> list[float] | None:
     """Text -> unit vector via local Ollama. Returns None on any failure.
 
     None is the 'embedder unavailable' signal that makes Layer 2 degrade
@@ -214,7 +216,7 @@ def _cosine(a, b):
     return sum(x * y for x, y in zip(a, b))
 
 
-def lookup(paths, question, tool, model):
+def lookup(paths: list[str], question: str, tool: str, model: str) -> str | None:
     """Return the cached output, or None on a miss. Never raises.
 
     A hit requires BOTH: the key matches, AND every file still hashes the same
@@ -290,7 +292,7 @@ def store(paths, question, tool, model, output, project=None):
             conn.close()
 
 
-def semantic_lookup(paths, question, tool, model, qvec=None, threshold=None):
+def semantic_lookup(paths: list[str], question: str, tool: str, model: str, qvec: list[float] | None = None, threshold: float | None = None) -> str | None:
     """TIER 1 — semantic cache. Return a cached answer when a *near-identical*
     question was asked about the *same unchanged files*.
 
@@ -335,8 +337,8 @@ def semantic_lookup(paths, question, tool, model, qvec=None, threshold=None):
             conn.close()
 
 
-def recall(question, project=None, qvec=None, k=3, floor=None,
-           scope="project+global"):
+def recall(question: str, project: str | None = None, qvec: list[float] | None = None, k: int = 3, floor: float | None = None,
+           scope: str = "project+global") -> list[dict]:
     """TIER 2 — recall related past conclusions to INJECT as context.
 
     Unlike the cache tiers this never short-circuits the worker; it just hands
@@ -397,8 +399,8 @@ def recall(question, project=None, qvec=None, k=3, floor=None,
             conn.close()
 
 
-def consolidate(max_age_days=90, min_uses=1, merge_threshold=0.97,
-                dry_run=False):
+def consolidate(max_age_days: int = 90, min_uses: int = 1, merge_threshold: float = 0.97,
+                dry_run: bool = False) -> dict:
     """CONSOLIDATION — keep the store small, fast, and trustworthy.
 
     Borrowed from how brains turn a flood of experiences into durable memory:
